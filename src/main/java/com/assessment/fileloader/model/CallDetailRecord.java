@@ -114,5 +114,5 @@ public class CallDetailRecord {
     private String ussdString;
 
     @Column(name = "ID", length = 150, nullable = false)
-    private String id;
+    private String recordId;
 }
