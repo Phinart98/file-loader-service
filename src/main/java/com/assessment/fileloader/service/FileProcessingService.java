@@ -4,64 +4,41 @@ import com.assessment.fileloader.model.CallDetailRecord;
 import com.assessment.fileloader.model.CdrLog;
 import com.assessment.fileloader.repository.CallDetailRecordRepository;
 import com.assessment.fileloader.repository.CdrLogRepository;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
-import java.io.IOException;
+import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
 @Service
+@Slf4j
+@RequiredArgsConstructor
 public class FileProcessingService {
 
-    private static final Logger logger = LoggerFactory.getLogger(FileProcessingService.class);
-    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss,SSS");
-    private static final DateTimeFormatter TIMESTAMP_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
-
-    private final CallDetailRecordRepository cdrRepository;
+    private final CallDetailRecordRepository callDetailRecordRepository;
     private final CdrLogRepository cdrLogRepository;
-
-    public FileProcessingService(CallDetailRecordRepository cdrRepository, CdrLogRepository cdrLogRepository) {
-        this.cdrRepository = cdrRepository;
-        this.cdrLogRepository = cdrLogRepository;
-    }
 
     @Transactional
     public void processFile(File file, String processedDirectory) {
-        String fileName = file.getName();
-        logger.info("Starting to process file: {}", fileName);
+        log.info("Processing file: {}", file.getName());
 
-        // Check if file has already been processed
-        Optional<CdrLog> existingLog = cdrLogRepository.findByFileName(fileName);
-        if (existingLog.isPresent() && "COMPLETED".equals(existingLog.get().getStatus())) {
-            logger.info("File {} has already been processed. Skipping.", fileName);
-            return;
-        }
-
-        // Create or update log entry
-        CdrLog cdrLog = existingLog.orElse(new CdrLog());
-        cdrLog.setFileName(fileName);
+        CdrLog cdrLog = new CdrLog();
+        cdrLog.setFileName(file.getName());
         cdrLog.setUploadStartTime(LocalDateTime.now());
-        cdrLog.setStatus("PROCESSING");
-        cdrLog.setSuccessfulRecords(0);
-        cdrLog.setFailedRecords(0);
-        cdrLogRepository.save(cdrLog);
+
+        int successCount = 0;
+        int failedCount = 0;
 
         List<CallDetailRecord> records = new ArrayList<>();
-        int successCount = 0;
-        int failCount = 0;
 
         try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
             String line;
@@ -70,42 +47,70 @@ public class FileProcessingService {
                     CallDetailRecord record = parseRecord(line);
                     records.add(record);
                     successCount++;
-
-                    // Batch processing to avoid memory issues with large files
-                    if (records.size() >= 100) {
-                        cdrRepository.saveAll(records);
-                        records.clear();
-                    }
                 } catch (Exception e) {
-                    failCount++;
-                    logger.error("Error parsing line: {}", line, e);
+                    log.error("Error parsing record: {}", line, e);
+                    failedCount++;
                 }
             }
 
-            // Save any remaining records
+            // Save all records in batch
             if (!records.isEmpty()) {
-                cdrRepository.saveAll(records);
+                callDetailRecordRepository.saveAll(records);
             }
 
-            // Update log entry
+            cdrLog.setSuccessCount(successCount);
+            cdrLog.setFailedCount(failedCount);
             cdrLog.setUploadEndTime(LocalDateTime.now());
-            cdrLog.setSuccessfulRecords(successCount);
-            cdrLog.setFailedRecords(failCount);
-            cdrLog.setStatus("COMPLETED");
             cdrLogRepository.save(cdrLog);
 
-            // Move file to processed directory
+            // Move the file to processed directory
             moveFileToProcessedDirectory(file, processedDirectory);
 
-            logger.info("File {} processed successfully. Success: {}, Failed: {}",
-                    fileName, successCount, failCount);
-        } catch (Exception e) {
+            log.info("File processed: {}. Success: {}, Failed: {}", file.getName(), successCount, failedCount);
+        } catch (IOException e) {
+            log.error("Error processing file: {}", file.getName(), e);
+            cdrLog.setFailedCount(failedCount);
+            cdrLog.setSuccessCount(successCount);
             cdrLog.setUploadEndTime(LocalDateTime.now());
-            cdrLog.setStatus("FAILED");
-            cdrLog.setErrorMessage(e.getMessage());
             cdrLogRepository.save(cdrLog);
+        }
+    }
 
-            logger.error("Error processing file: {}", fileName, e);
+    private void moveFileToProcessedDirectory(File file, String processedDirectory) {
+        try {
+            Path source = file.toPath();
+            Path target = Paths.get(processedDirectory, file.getName());
+
+            // Close any open file handles by forcing a garbage collection
+            System.gc();
+
+            // Add a small delay to ensure file handles are released
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+
+            // Try to move the file
+            try {
+                Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+                log.info("Moved file to processed directory: {}", target);
+            } catch (IOException e) {
+                // If moving fails, try to copy and then delete
+                log.warn("Could not move file, attempting to copy instead: {}", file.getName());
+                Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
+
+                // Try to delete the original file, but don't fail if it doesn't work
+                try {
+                    Files.delete(source);
+                } catch (IOException deleteException) {
+                    log.warn("Could not delete original file after copying: {}", file.getName());
+                }
+
+                log.info("Copied file to processed directory: {}", target);
+            }
+        } catch (IOException e) {
+            log.error("Error moving file to processed directory: {}", file.getName(), e);
         }
     }
 
@@ -125,54 +130,63 @@ public class FileProcessingService {
          * @throws RuntimeException if date parsing fails
          */
         String[] fields = line.split("\\|");
+
         CallDetailRecord record = new CallDetailRecord();
 
-        try {
-            // Parse RECORD_DATE (first field)
-            record.setRecordDate(LocalDateTime.parse(fields[0], DATE_FORMATTER));
+        // Parse timestamp in format "2023-08-18 10:00:00,024"
+        String recordDateStr = fields[0];
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss,SSS");
+        LocalDateTime recordDate = LocalDateTime.parse(recordDateStr, formatter);
+        record.setRecordDate(recordDate);
 
-            // Parse numeric fields
-            if (fields.length > 1) record.setLSpc(parseIntOrNull(fields[1]));
-            if (fields.length > 2) record.setLSsn(parseIntOrNull(fields[2]));
-            if (fields.length > 3) record.setLRi(parseIntOrNull(fields[3]));
-            if (fields.length > 4) record.setLGtI(parseIntOrNull(fields[4]));
-            if (fields.length > 5) record.setLGtDigits(fields[5]);
-            if (fields.length > 6) record.setRSpc(parseIntOrNull(fields[6]));
-            if (fields.length > 7) record.setRSsn(parseIntOrNull(fields[7]));
-            if (fields.length > 8) record.setRRi(parseIntOrNull(fields[8]));
-            if (fields.length > 9) record.setRGtI(parseIntOrNull(fields[9]));
-            if (fields.length > 10) record.setRGtDigits(fields[10]);
-            if (fields.length > 11) record.setServiceCode(fields[11]);
-            if (fields.length > 12) record.setOrNature(parseIntOrNull(fields[12]));
-            if (fields.length > 13) record.setOrPlan(parseIntOrNull(fields[13]));
-            if (fields.length > 14) record.setOrDigits(fields[14]);
-            if (fields.length > 15) record.setDeNature(parseIntOrNull(fields[15]));
-            if (fields.length > 16) record.setDePlan(parseIntOrNull(fields[16]));
-            if (fields.length > 17) record.setDeDigits(fields[17]);
-            if (fields.length > 18) record.setIsdnNature(parseIntOrNull(fields[18]));
-            if (fields.length > 19) record.setIsdnPlan(parseIntOrNull(fields[19]));
-            if (fields.length > 20) record.setMsisdn(fields[20]);
-            if (fields.length > 21) record.setVlrNature(parseIntOrNull(fields[21]));
-            if (fields.length > 22) record.setVlrPlan(parseIntOrNull(fields[22]));
-            if (fields.length > 23) record.setVlrDigits(fields[23]);
-            if (fields.length > 24) record.setImsi(fields[24]);
-            if (fields.length > 25) record.setStatus(fields[25]);
-            if (fields.length > 26) record.setType(fields[26]);
+        // Parse other fields
+        record.setLSpc(parseIntOrNull(fields[1]));
+        record.setLSsn(parseIntOrNull(fields[2]));
+        record.setLRi(parseIntOrNull(fields[3]));
+        record.setLGtI(parseIntOrNull(fields[4]));
+        record.setLGtDigits(fields[5]);
+        record.setRSpc(parseIntOrNull(fields[6]));
+        record.setRSsn(parseIntOrNull(fields[7]));
+        record.setRRi(parseIntOrNull(fields[8]));
+        record.setRGtI(parseIntOrNull(fields[9]));
+        record.setRGtDigits(fields[10]);
+        record.setServiceCode(fields[11]);
+        record.setOrNature(parseIntOrNull(fields[12]));
+        record.setOrPlan(parseIntOrNull(fields[13]));
+        record.setOrDigits(fields[14]);
+        record.setDeNature(parseIntOrNull(fields[15]));
+        record.setDePlan(parseIntOrNull(fields[16]));
+        record.setDeDigits(fields[17]);
+        record.setIsdnNature(parseIntOrNull(fields[18]));
+        record.setIsdnPlan(parseIntOrNull(fields[19]));
+        record.setMsisdn(fields[20]);
 
-            // Parse TSTAMP
-            if (fields.length > 27) record.setTstamp(LocalDateTime.parse(fields[27], TIMESTAMP_FORMATTER));
+        // Handle optional VLR fields
+        if (fields.length > 21) record.setVlrNature(parseIntOrNull(fields[21]));
+        if (fields.length > 22) record.setVlrPlan(parseIntOrNull(fields[22]));
+        if (fields.length > 23) record.setVlrDigits(fields[23]);
 
-            // Parse remaining fields
-            if (fields.length > 28) record.setLocalDialogId(parseLongOrNull(fields[28]));
-            if (fields.length > 29) record.setRemoteDialogId(parseLongOrNull(fields[29]));
-            if (fields.length > 30) record.setDialogDuration(parseLongOrNull(fields[30]));
-            if (fields.length > 31) record.setUssdString(fields[31]);
-            if (fields.length > 32) record.setRecordId(fields[32]);
+        // Handle IMSI field
+        if (fields.length > 24) record.setImsi(fields[24]);
 
-        } catch (DateTimeParseException e) {
-            logger.error("Error parsing date in record: {}", line, e);
-            throw new RuntimeException("Error parsing date in record", e);
+        // Required fields
+        if (fields.length > 25) record.setStatus(fields[25]);
+        if (fields.length > 26) record.setType(fields[26]);
+
+        // Parse timestamp in format "2023-08-18 10:00:00.024"
+        if (fields.length > 27) {
+            String tstampStr = fields[27];
+            DateTimeFormatter tstampFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+            LocalDateTime tstamp = LocalDateTime.parse(tstampStr, tstampFormatter);
+            record.setTstamp(tstamp);
         }
+
+        // Parse remaining fields
+        if (fields.length > 28) record.setLocalDialogId(parseLongOrNull(fields[28]));
+        if (fields.length > 29) record.setRemoteDialogId(parseLongOrNull(fields[29]));
+        if (fields.length > 30) record.setDialogDuration(parseLongOrNull(fields[30]));
+        if (fields.length > 31) record.setUssdString(fields[31]);
+        if (fields.length > 32) record.setRecordId(fields[32]);
 
         return record;
     }
@@ -197,17 +211,5 @@ public class FileProcessingService {
         } catch (NumberFormatException e) {
             return null;
         }
-    }
-
-    private void moveFileToProcessedDirectory(File file, String processedDirectory) throws IOException {
-        Path source = file.toPath();
-        Path target = Paths.get(processedDirectory, file.getName());
-
-        // Create processed directory if it doesn't exist
-        Files.createDirectories(Paths.get(processedDirectory));
-
-        // Move file to processed directory
-        Files.move(source, target);
-        logger.info("Moved file {} to processed directory", file.getName());
     }
 }

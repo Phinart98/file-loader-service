@@ -113,6 +113,6 @@ public class CallDetailRecord {
     @Column(name = "USSD_STRING", length = 255)
     private String ussdString;
 
-    @Column(name = "ID", length = 150, nullable = false)
+    @Column(name = "RECORD_UNIQUE_ID", length = 150, nullable = false)
     private String recordId;
 }

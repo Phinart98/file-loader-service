@@ -26,15 +26,9 @@ public class CdrLog {
     @Column(name = "upload_end_time")
     private LocalDateTime uploadEndTime;
 
-    @Column(name = "successful_records")
-    private Integer successfulRecords;
+    @Column(name = "success_count")
+    private Integer successCount;
 
-    @Column(name = "failed_records")
-    private Integer failedRecords;
-
-    @Column(name = "status", nullable = false)
-    private String status;
-
-    @Column(name = "error_message")
-    private String errorMessage;
+    @Column(name = "failed_count")
+    private Integer failedCount;
 }
