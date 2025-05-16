@@ -27,7 +27,34 @@ This starts:
 - PostgreSQL database on port 5432
 - pgAdmin web interface on http://localhost:5050
 
-### 3. Run the application
+
+### 3. Configure Input Directory
+
+The application is configured to monitor a specific directory for new files. You have two options:
+
+#### Option A: Use the Sample Data (Recommended for Testing)
+
+1. Create directories for input and processed files:
+```bash
+mkdir -p C:/ussd/input C:/ussd/processed
+```
+
+2. Copy sample files to the input directory:
+```bash
+cp sample-data/input/* C:/ussd/input/
+```
+
+#### Option B: Configure Custom Directories
+
+Edit `src/main/resources/application.properties` to set your preferred directories:
+
+```properties
+file.monitoring.directory=YOUR_INPUT_DIRECTORY_PATH
+file.monitoring.processed-directory=YOUR_PROCESSED_DIRECTORY_PATH
+```
+
+
+### 4. Run the application
 
 Open the project in your IDE (IntelliJ IDEA or VS Code) and run the application directly.
 
@@ -36,7 +63,7 @@ The application will:
 - Monitor the configured directory for new files
 - Process files and load records into the database
 
-### 4. Access pgAdmin
+### 5. Access pgAdmin
 
 - Open http://localhost:5050 in your browser
 - Login with:
@@ -49,11 +76,11 @@ The application will:
     - Username: postgres
     - Password: postgres
 
-### 5. Process files
+### 6. Process files
 
 Place USSD log files in the directory configured in `application.properties` (default: C:/ussd/input).
 
-### 6. Stop the database
+### 7. Stop the database
 
 When finished:
 
