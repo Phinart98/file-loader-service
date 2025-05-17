@@ -48,12 +48,13 @@ public class FileMonitoringService {
                 return;
             }
 
-            // Process each file
+            // Process each file that hasn't been processed before
             List<File> fileList = Arrays.stream(files)
                     .filter(File::isFile)
+                    .filter(file -> !fileProcessingService.hasBeenProcessed(file.getName()))
                     .toList();
 
-            logger.info("Found {} files to process", fileList.size());
+            logger.info("Found {} new files to process", fileList.size());
 
             for (File file : fileList) {
                 fileProcessingService.processFile(file, processedDirectory);

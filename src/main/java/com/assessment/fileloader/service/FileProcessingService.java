@@ -27,6 +27,15 @@ public class FileProcessingService {
     private final CallDetailRecordRepository callDetailRecordRepository;
     private final CdrLogRepository cdrLogRepository;
 
+    /**
+     * Check if a file has already been processed
+     * @param fileName the name of the file to check
+     * @return true if the file has been processed, false otherwise
+     */
+    public boolean hasBeenProcessed(String fileName) {
+        return cdrLogRepository.existsByFileName(fileName);
+    }
+
     @Transactional
     public void processFile(File file, String processedDirectory) {
         log.info("Processing file: {}", file.getName());
@@ -114,21 +123,21 @@ public class FileProcessingService {
         }
     }
 
+    /*
+     * Parses a pipe-delimited call detail record string into a CallDetailRecord object.
+     *
+     * Note on implementation: This method uses explicit field-by-field parsing rather than a loop
+     * for several reasons:
+     * 1. Type safety - Each field requires specific type conversion
+     * 2. Clarity - Easy to see which index corresponds to which field
+     * 3. Maintainability - Simple to modify validation or parsing logic for individual fields
+     * 4. Robustness - Gracefully handles records with missing fields
+     *
+     * @param line The pipe-delimited record string to parse
+     * @return A populated CallDetailRecord object
+     * @throws RuntimeException if date parsing fails
+     */
     private CallDetailRecord parseRecord(String line) {
-        /*
-         * Parses a pipe-delimited call detail record string into a CallDetailRecord object.
-         *
-         * Note on implementation: This method uses explicit field-by-field parsing rather than a loop
-         * for several reasons:
-         * 1. Type safety - Each field requires specific type conversion
-         * 2. Clarity - Easy to see which index corresponds to which field
-         * 3. Maintainability - Simple to modify validation or parsing logic for individual fields
-         * 4. Robustness - Gracefully handles records with missing fields
-         *
-         * @param line The pipe-delimited record string to parse
-         * @return A populated CallDetailRecord object
-         * @throws RuntimeException if date parsing fails
-         */
         String[] fields = line.split("\\|");
 
         CallDetailRecord record = new CallDetailRecord();

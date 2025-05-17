@@ -4,9 +4,13 @@ import com.assessment.fileloader.model.CdrLog;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
-import java.util.Optional;
-
 @Repository
 public interface CdrLogRepository extends JpaRepository<CdrLog, Long> {
-    Optional<CdrLog> findByFileName(String fileName);
+
+    /**
+     * Check if a file has already been processed
+     * @param fileName the name of the file to check
+     * @return true if the file has been processed, false otherwise
+     */
+    boolean existsByFileName(String fileName);
 }
